@@ -1,0 +1,8 @@
+{
+  "model": "gpt-6.1-sol",
+  "effort": "",
+  "noFilter": false,
+  "exclude": [],
+  "maxTokensBudget": 0,
+  "timeoutMinutes": 0
+}
