@@ -83,12 +83,12 @@ jobs:
               if (!Number.isSafeInteger(s[k]) || s[k] < 0) fail(`${k} must be a whole number, 0 or more`);
             }
             // Flags only for non-default values, so defaults behave like OCR's own.
-            const args = [];
+            // --timeout is always passed: omitting it means OCR's 15, not 0 (unlimited).
+            const args = ['--timeout', String(s.timeoutMinutes)];
             if (s.effort) args.push('--effort', s.effort);
             if (s.noFilter) args.push('--no-filter');
             if (s.exclude.length) args.push('--exclude', s.exclude.join(','));
             if (s.maxTokensBudget) args.push('--max-tokens-budget', String(s.maxTokensBudget));
-            if (s.timeoutMinutes) args.push('--timeout', String(s.timeoutMinutes));
             fs.writeFileSync(`${process.env.RUNNER_TEMP}/ocr-args`, args.map((a) => `${a}\0`).join(''));
             core.setOutput('model', s.model);
             core.info(`model=${s.model} extra flags: ${args.join(' ') || '(none)'}`);

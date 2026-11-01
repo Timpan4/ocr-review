@@ -45,12 +45,13 @@ hand works the same way.
 | `effort` | `ocr review --effort`: `low`, `medium` or `high`. `""` uses OCR's default. | `""` |
 | `noFilter` | `--no-filter`: keep every comment, skip OCR's LLM post-filtering. | `false` |
 | `exclude` | `--exclude`: gitignore-style patterns to skip, merged with each repository's `rule.json` excludes. | `[]` |
-| `maxTokensBudget` | `--max-tokens-budget`: total token cap per review. `0` sets no cap. | `0` |
-| `timeoutMinutes` | `--timeout`: review budget in minutes. `0` sets no limit; the job still stops at 60 minutes. | `0` |
+| `maxTokensBudget` | `--max-tokens-budget`: token budget per review, checked before each LLM round. It is a soft limit: a group already over it gets one final round, and groups in flight finish. `0` sets no budget. | `0` |
+| `timeoutMinutes` | `--timeout`: time limit in minutes for each review group, multiplied by the template's review rounds. It does not limit the whole review. `0` sets no limit; the job still stops at 60 minutes. | `15` (OCR's default) |
 
 The workflow rejects unknown keys, missing keys and invalid values and fails
-the job, so a bad edit cannot silently fall back to defaults. Flags are passed
-only for non-default values.
+the job, so a bad edit cannot silently fall back to defaults. `--timeout` is
+always passed, because OCR treats a missing flag as 15 minutes. The other flags
+are passed only for non-default values.
 
 ## Releases
 

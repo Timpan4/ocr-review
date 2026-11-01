@@ -4,5 +4,5 @@
   "noFilter": false,
   "exclude": [],
   "maxTokensBudget": 0,
-  "timeoutMinutes": 0
+  "timeoutMinutes": 15
 }
