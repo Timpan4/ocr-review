@@ -84,6 +84,9 @@ jobs:
             for (const k of ['maxTokensBudget', 'timeoutMinutes']) {
               if (!Number.isSafeInteger(s[k]) || s[k] < 0) fail(`${k} must be a whole number, 0 or more`);
             }
+            // This job's timeout-minutes. A longer group timeout can never fire, and much
+            // larger values overflow OCR's duration and disable the timeout.
+            if (s.timeoutMinutes > 60) fail('timeoutMinutes must be at most 60, the job timeout');
             // Flags only for non-default values, so defaults behave like OCR's own.
             // --timeout is always passed: omitting it means OCR's 15, not 0 (unlimited).
             const args = ['--timeout', String(s.timeoutMinutes)];
