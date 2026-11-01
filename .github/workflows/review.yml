@@ -1,0 +1,100 @@
+name: ocr-review
+
+# OpenCodeReview (OCR) on the wall-e review runners, using the owner's Sign in
+# with ChatGPT session. Callers trigger on pull_request; see README.md.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ocr-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  OCR_VERSION: v1.13.3
+  OCR_SHA256: 843be0e56fdff0a5ca6f86c5866f942d6a372dff1c0ca19e7893d72495abf45c
+  # scripts/github-actions/post-review-comments.js at OCR_VERSION.
+  OCR_POSTER_SHA256: 1d5decf90627353f1e7a2cad291d4ee4ec0a661d9724b93b2d7d5246f33462e2
+  OCR_MODEL: gpt-6.1-sol
+
+jobs:
+  review:
+    # Same-repository PRs only: fork PRs never reach the self-hosted runner from
+    # here. Kargo promotion PRs only bump a version.
+    if: >-
+      github.event.pull_request && !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !startsWith(github.head_ref, 'kargo/promotion/')
+    runs-on: wall-e-review
+    # Owner choice in wall-e-infra docs/code-review.md.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install OCR
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/ocr-bin"
+          mkdir -p "$bin"
+          base="https://github.com/alibaba/open-code-review"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$base/releases/download/$OCR_VERSION/opencodereview-linux-amd64" --output "$bin/ocr"
+          printf '%s  %s\n' "$OCR_SHA256" "$bin/ocr" | sha256sum --check >/dev/null
+          chmod 0755 "$bin/ocr"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://raw.githubusercontent.com/alibaba/open-code-review/$OCR_VERSION/scripts/github-actions/post-review-comments.js" \
+            --output "$RUNNER_TEMP/post-review-comments.js"
+          printf '%s  %s\n' "$OCR_POSTER_SHA256" "$RUNNER_TEMP/post-review-comments.js" | sha256sum --check >/dev/null
+          echo "$bin" >>"$GITHUB_PATH"
+
+      - name: Configure OCR
+        run: |
+          set -euo pipefail
+          ocr config set provider chatgpt
+          ocr config set providers.chatgpt.model "$OCR_MODEL"
+
+      - name: Run OCR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          ocr review --from "$BASE_SHA" --to "$HEAD_SHA" --audience agent --format json \
+            >"$RUNNER_TEMP/ocr-result.json" 2>"$RUNNER_TEMP/ocr-stderr.log"
+          code=$?
+          set -e
+          echo "OCR_EXIT_CODE=$code" >>"$GITHUB_ENV"
+          cat "$RUNNER_TEMP/ocr-stderr.log" >&2
+
+      - name: Post review comments
+        if: env.OCR_EXIT_CODE == '0'
+        uses: actions/github-script@v9
+        env:
+          OCR_PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const temp = process.env.RUNNER_TEMP;
+            const { runPostReviewComments } = require(`${temp}/post-review-comments.js`);
+            await runPostReviewComments({
+              github,
+              context,
+              core,
+              fs,
+              prNumber: Number(process.env.OCR_PR_NUMBER),
+              resultPath: `${temp}/ocr-result.json`,
+              stderrPath: `${temp}/ocr-stderr.log`,
+            });
+
+      - name: Fail on review error
+        if: env.OCR_EXIT_CODE != '0'
+        run: |
+          echo "::error::ocr review exited with $OCR_EXIT_CODE; see the Run OCR step log."
+          exit 1
