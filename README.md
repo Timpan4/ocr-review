@@ -1,37 +1,16 @@
 # ocr-review
 
-A reusable GitHub Actions workflow that reviews pull requests with
-[OpenCodeReview](https://github.com/alibaba/open-code-review) (OCR) on the
-`wall-e-review` self-hosted runners. The runners, their limits, and the ChatGPT
-session they use are managed in the private `wall-e-infra` repository.
+A reusable GitHub Actions workflow, `review-app.yml`, that reviews pull
+requests with [OpenCodeReview](https://github.com/alibaba/open-code-review)
+(OCR) on the `wall-e-review` self-hosted runners. The runners, their limits,
+and the ChatGPT session they use are managed in the private `wall-e-infra`
+repository.
 
-It lives in its own public repository because GitHub lets public repositories
-call reusable workflows only from public repositories. It contains no secrets.
+The repository stays public because the workflow reads `settings.json` with
+the calling repository's token, which cannot read another private repository.
+It contains no secrets.
 
-## Use
-
-Only repositories owned by `Timpan4` that have a `wall-e-review` runner set can
-run it. In such a repository, add `.github/workflows/code-review.yml`:
-
-```yaml
-name: code-review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-permissions:
-  contents: read
-  pull-requests: write
-jobs:
-  review:
-    uses: Timpan4/ocr-review/.github/workflows/review.yml@v1
-```
-
-The job skips drafts, Kargo promotion branches, and pull requests from forks.
-On a public repository, also require approval for fork pull request workflows
-from all outside contributors: a fork pull request can edit the caller workflow
-itself.
-
-## Use without a workflow file
+## How it runs
 
 `review-app.yml` reviews pull requests in any `Timpan4` repository where the
 reviewer GitHub App is installed, with nothing added to that repository:
@@ -46,16 +25,20 @@ reviewer GitHub App is installed, with nothing added to that repository:
 4. `review-app.yml` mints an App token for the one repository, with Contents
    read and Pull requests write. It reads the pull request again and skips it
    when it is closed, a draft, from a fork, a Kargo promotion, or no longer at
-   the dispatched head. It also skips repositories whose
-   `.github/workflows/code-review.yml` still calls `review.yml`, so no pull
-   request is reviewed twice while callers are removed.
-5. It runs the same OCR install, settings, and review steps as `review.yml`,
-   and posts as the App.
+   the dispatched head.
+5. It installs OCR, loads the settings, reviews the diff, and posts as the
+   App.
 
 The App posts as `<app-slug>[bot]`, and an installation token cannot read its
 own login, so the post step reports that login to the poster. Without it,
 `incremental` would match only `github-actions[bot]` comments and repeat the
-App's own findings on every push.
+App's own findings on every push. Comments that the retired `review.yml`
+posted as `github-actions[bot]` do not count, so a pull request opened before
+the move can get a finding again once.
+
+A fork pull request never runs here: no workflow runs in the reviewed
+repository, the receiver drops fork pull requests, and the workflow checks the
+head repository again before checking out any code.
 
 ## Posting
 
@@ -72,9 +55,8 @@ options:
   the author fixed or dismissed it. A comment on lines that only shifted keeps
   matching. A comment whose lines a later push changed becomes outdated
   (GitHub sets its `line` to null) and no longer matches, so a finding on
-  rewritten code can repeat. Earlier comments are recognized by the poster's
-  login only, so review comments from another tool that also posts as
-  `github-actions[bot]` suppress findings too.
+  rewritten code can repeat. Earlier comments are recognized by the App's
+  login only.
 - `routeCategories: 'performance'`: performance findings go to the summary
   comment instead of inline threads. In a measured sample of 30 KubeCove pull
   requests, none of 10 inline performance findings led to a change, and none
@@ -104,7 +86,7 @@ are passed only for non-default values.
 
 ## Releases
 
-Callers follow the `v1` tag. To release a change, tag it `v1.x.y` and move `v1`
-to the same commit. When upgrading OCR, change `OCR_VERSION`, `OCR_SHA256` (the
+wall-e-infra's `ocr-dispatch.yml` follows the `v1` tag. To release a change,
+tag it `v1.x.y` and move `v1` to the same commit. When upgrading OCR, change `OCR_VERSION`, `OCR_SHA256` (the
 release's `opencodereview-linux-amd64` digest) and `OCR_POSTER_SHA256` (the
 `scripts/github-actions/post-review-comments.js` digest at that tag) together.
