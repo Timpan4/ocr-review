@@ -37,9 +37,11 @@ The workflow posts with OCR's own `post-review-comments.js` and sets two of its
 options:
 
 - `incremental`: a single-line finding is skipped when an earlier single-line
-  comment sits on the same line. A multi-line finding is skipped when an
-  earlier multi-line comment's range overlaps it by more than 60% of the two
-  ranges combined. A single-line finding inside an earlier range still posts.
+  comment sits on the same line. A multi-line finding is skipped when its
+  intersection over union with an earlier multi-line comment's range is
+  strictly greater than 0.6: the lines both ranges cover, divided by the lines
+  either range covers. A single-line finding inside an earlier range still
+  posts.
   Resolved threads count, so a later push does not raise a finding again after
   the author fixed or dismissed it. A comment on lines that only shifted keeps
   matching. A comment whose lines a later push changed becomes outdated
