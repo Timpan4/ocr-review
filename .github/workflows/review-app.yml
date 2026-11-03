@@ -59,6 +59,8 @@ jobs:
           set -euo pipefail
           [[ "$REPOSITORY" =~ ^Timpan4/([A-Za-z0-9._-]+)$ ]] || { echo "::error::repository must be Timpan4/<name>"; exit 1; }
           name="${BASH_REMATCH[1]}"
+          # "." and ".." pass the pattern but would rewrite later API paths.
+          [[ "$name" != "." && "$name" != ".." ]] || { echo "::error::repository must be Timpan4/<name>"; exit 1; }
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,9}$ ]] || { echo "::error::pr_number must be a positive integer"; exit 1; }
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::head_sha must be a 40-character commit SHA"; exit 1; }
           echo "name=$name" >>"$GITHUB_OUTPUT"
@@ -110,7 +112,8 @@ jobs:
                 owner: 'Timpan4', repo, path: '.github/workflows/code-review.yml', ref: pr.head.sha,
                 mediaType: { format: 'raw' },
               });
-              if (String(caller).includes('Timpan4/ocr-review/.github/workflows/review.yml')) {
+              // GitHub resolves owner and repository names case-insensitively.
+              if (String(caller).toLowerCase().includes('timpan4/ocr-review/.github/workflows/review.yml')) {
                 return skip('its code-review.yml already calls review.yml');
               }
             } catch (error) {
