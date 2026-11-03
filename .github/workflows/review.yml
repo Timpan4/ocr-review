@@ -138,6 +138,12 @@ jobs:
               prNumber: Number(process.env.OCR_PR_NUMBER),
               resultPath: `${temp}/ocr-result.json`,
               stderrPath: `${temp}/ocr-stderr.log`,
+              // Skip findings on lines an earlier OCR comment on this PR already
+              // covers, resolved or not, so a later push does not raise them again.
+              incremental: true,
+              // Performance findings without a measurement went unfixed, so they
+              // go to the summary instead of inline threads.
+              routeCategories: 'performance',
             });
 
       - name: Fail on review error
