@@ -32,9 +32,9 @@ reviewer GitHub App is installed, with nothing added to that repository:
 The App posts as `<app-slug>[bot]`, and an installation token cannot read its
 own login, so the post step reports that login to the poster. Without it,
 `incremental` would match only `github-actions[bot]` comments and repeat the
-App's own findings on every push. Comments that the retired `review.yml`
-posted as `github-actions[bot]` do not count, so a pull request opened before
-the move can get a finding again once.
+App's own findings on every push. The poster also always counts
+`github-actions[bot]` comments, so findings that the retired `review.yml`
+posted on an open pull request are not repeated.
 
 A fork pull request never runs here: no workflow runs in the reviewed
 repository, the receiver drops fork pull requests, and the workflow checks the
@@ -55,8 +55,9 @@ options:
   the author fixed or dismissed it. A comment on lines that only shifted keeps
   matching. A comment whose lines a later push changed becomes outdated
   (GitHub sets its `line` to null) and no longer matches, so a finding on
-  rewritten code can repeat. Earlier comments are recognized by the App's
-  login only.
+  rewritten code can repeat. Earlier comments count when they come from the
+  App's login or from `github-actions[bot]`, so review comments from another
+  Actions workflow on the same lines suppress findings too.
 - `routeCategories: 'performance'`: performance findings go to the summary
   comment instead of inline threads. In a measured sample of 30 KubeCove pull
   requests, none of 10 inline performance findings led to a change, and none
