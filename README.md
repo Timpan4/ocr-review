@@ -36,11 +36,17 @@ itself.
 The workflow posts with OCR's own `post-review-comments.js` and sets two of its
 options:
 
-- `incremental`: a finding is skipped when an earlier OCR comment on the pull
-  request sits on the same line, or, for a multi-line finding, on a range whose
-  overlap is more than 60% of the two ranges combined. Resolved threads count. A later push therefore does not raise
-  a finding again after the author fixed or dismissed it. A comment whose code
-  has since moved is no longer matched, so a finding on moved code can repeat.
+- `incremental`: a single-line finding is skipped when an earlier single-line
+  comment sits on the same line. A multi-line finding is skipped when an
+  earlier multi-line comment's range overlaps it by more than 60% of the two
+  ranges combined. A single-line finding inside an earlier range still posts.
+  Resolved threads count, so a later push does not raise a finding again after
+  the author fixed or dismissed it. A comment on lines that only shifted keeps
+  matching. A comment whose lines a later push changed becomes outdated
+  (GitHub sets its `line` to null) and no longer matches, so a finding on
+  rewritten code can repeat. Earlier comments are recognized by the poster's
+  login only, so review comments from another tool that also posts as
+  `github-actions[bot]` suppress findings too.
 - `routeCategories: 'performance'`: performance findings go to the summary
   comment instead of inline threads. In a measured sample of 30 KubeCove pull
   requests, none of 10 inline performance findings led to a change, and none
