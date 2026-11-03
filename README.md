@@ -31,6 +31,32 @@ On a public repository, also require approval for fork pull request workflows
 from all outside contributors: a fork pull request can edit the caller workflow
 itself.
 
+## Use without a workflow file
+
+`review-app.yml` reviews pull requests in any `Timpan4` repository where the
+reviewer GitHub App is installed, with nothing added to that repository:
+
+1. The App's `pull_request` webhook goes to
+   [`Timpan4/ocr-dispatch`](https://github.com/Timpan4/ocr-dispatch) at
+   `https://ocr.timpan.dev/hooks/github`.
+2. ocr-dispatch dispatches `ocr-dispatch.yml` in `wall-e-infra` with the
+   repository, pull request number, and head SHA.
+3. That workflow calls `review-app.yml@v1` on the `wall-e-infra` runner set,
+   passing the App's client ID and private key as secrets.
+4. `review-app.yml` mints an App token for the one repository, with Contents
+   read and Pull requests write. It reads the pull request again and skips it
+   when it is closed, a draft, from a fork, a Kargo promotion, or no longer at
+   the dispatched head. It also skips repositories whose
+   `.github/workflows/code-review.yml` still calls `review.yml`, so no pull
+   request is reviewed twice while callers are removed.
+5. It runs the same OCR install, settings, and review steps as `review.yml`,
+   and posts as the App.
+
+The App posts as `<app-slug>[bot]`, and an installation token cannot read its
+own login, so the post step reports that login to the poster. Without it,
+`incremental` would match only `github-actions[bot]` comments and repeat the
+App's own findings on every push.
+
 ## Posting
 
 The workflow posts with OCR's own `post-review-comments.js` and sets two of its
