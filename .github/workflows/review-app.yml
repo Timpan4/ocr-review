@@ -188,7 +188,8 @@ jobs:
             // its global rule layer, and include patterns there let files past its
             // extension allowlist, such as Markdown. Later steps run ocr with this
             // same HOME; on the wall-e runners that directory is a per-pod emptyDir.
-            // A repository's own .opencodereview/rule.json replaces this layer.
+            // A repository's own .opencodereview/rule.json with a non-empty include
+            // or exclude replaces this layer.
             if (s.include.length) {
               const home = process.env.HOME;
               if (!home) fail('include needs HOME to locate ~/.opencodereview/rule.json');
