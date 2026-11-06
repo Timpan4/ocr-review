@@ -145,23 +145,30 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
             const { data } = await github.rest.repos.getContent({
               owner: 'Timpan4', repo: 'ocr-review', path: 'settings.json', ref: 'main',
               mediaType: { format: 'raw' },
             });
             const s = JSON.parse(data);
             const fail = (msg) => { throw new Error(`Timpan4/ocr-review settings.json: ${msg}`); };
-            const keys = ['model', 'effort', 'noFilter', 'exclude', 'maxTokensBudget', 'timeoutMinutes'];
+            const keys = ['model', 'effort', 'noFilter', 'exclude', 'include', 'maxTokensBudget', 'timeoutMinutes'];
             if (s === null || typeof s !== 'object' || Array.isArray(s)) fail('must be a JSON object');
+            // Rollout: this workflow is released before settings.json on main gains
+            // include, so a missing include reads as []. See README.md, Releases.
+            if (!('include' in s)) s.include = [];
             for (const k of Object.keys(s)) if (!keys.includes(k)) fail(`unknown key ${k}`);
             for (const k of keys) if (!(k in s)) fail(`missing key ${k}`);
             if (typeof s.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/.test(s.model)) fail('model must be a model name');
             if (!['', 'low', 'medium', 'high'].includes(s.effort)) fail('effort must be "", low, medium or high');
             if (typeof s.noFilter !== 'boolean') fail('noFilter must be true or false');
             // Commas would split the --exclude value; control characters include NUL,
-            // which would split ocr-args into extra arguments.
-            if (!Array.isArray(s.exclude) || !s.exclude.every((p) => typeof p === 'string' && p !== '' && !/[,\x00-\x1f\x7f]/.test(p))) {
-              fail('exclude must be a list of patterns without commas or control characters');
+            // which would split ocr-args into extra arguments. include follows the
+            // same rule so both lists accept the same patterns.
+            for (const k of ['exclude', 'include']) {
+              if (!Array.isArray(s[k]) || !s[k].every((p) => typeof p === 'string' && p !== '' && !/[,\x00-\x1f\x7f]/.test(p))) {
+                fail(`${k} must be a list of patterns without commas or control characters`);
+              }
             }
             for (const k of ['maxTokensBudget', 'timeoutMinutes']) {
               if (!Number.isSafeInteger(s[k]) || s[k] < 0) fail(`${k} must be a whole number, 0 or more`);
@@ -177,8 +184,20 @@ jobs:
             if (s.exclude.length) args.push('--exclude', s.exclude.join(','));
             if (s.maxTokensBudget) args.push('--max-tokens-budget', String(s.maxTokensBudget));
             fs.writeFileSync(`${process.env.RUNNER_TEMP}/ocr-args`, args.map((a) => `${a}\0`).join(''));
+            // OCR has no include flag. It reads $HOME/.opencodereview/rule.json as
+            // its global rule layer, and include patterns there let files past its
+            // extension allowlist, such as Markdown. Later steps run ocr with this
+            // same HOME; on the wall-e runners that directory is a per-pod emptyDir.
+            // A repository's own .opencodereview/rule.json replaces this layer.
+            if (s.include.length) {
+              const home = process.env.HOME;
+              if (!home) fail('include needs HOME to locate ~/.opencodereview/rule.json');
+              const dir = path.join(home, '.opencodereview');
+              fs.mkdirSync(dir, { recursive: true });
+              fs.writeFileSync(path.join(dir, 'rule.json'), `${JSON.stringify({ include: s.include }, null, 2)}\n`);
+            }
             core.setOutput('model', s.model);
-            core.info(`model=${s.model} extra flags: ${args.join(' ') || '(none)'}`);
+            core.info(`model=${s.model} extra flags: ${args.join(' ') || '(none)'} include: ${s.include.join(' ') || '(none)'}`);
 
       - name: Configure OCR
         if: steps.pr.outputs.review == 'true'
