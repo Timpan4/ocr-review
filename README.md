@@ -77,17 +77,33 @@ hand works the same way.
 | `effort` | `ocr review --effort`: `low`, `medium` or `high`. `""` uses OCR's default. | `""` |
 | `noFilter` | `--no-filter`: keep every comment, skip OCR's LLM post-filtering. | `false` |
 | `exclude` | `--exclude`: gitignore-style patterns to skip, merged with each repository's `rule.json` excludes. | `[]` |
+| `include` | Gitignore-style patterns to review even when OCR would skip them for their extension or a built-in path such as a nested `**/vendor/**`, for example `**/*.md`. Provider directories at the repository root, such as `vendor/`, `node_modules/` and `target/`, stay excluded. Written as `include` in `~/.opencodereview/rule.json` on the runner. Same pattern rules as `exclude`. `exclude` still wins over `include`. | `[]` |
 | `maxTokensBudget` | `--max-tokens-budget`: token budget per review, checked before each LLM round. It is a soft limit: a group already over it gets one final round, and groups in flight finish. `0` sets no budget. | `0` |
 | `timeoutMinutes` | `--timeout`: time limit in minutes for each review group, multiplied by the template's review rounds. It does not limit the whole review. `0` sets no limit; the job still stops at 60 minutes. At most `60`, the job timeout. | `15` (OCR's default) |
 
 The workflow rejects unknown keys, missing keys and invalid values and fails
-the job, so a bad edit cannot silently fall back to defaults. `--timeout` is
-always passed, because OCR treats a missing flag as 15 minutes. The other flags
-are passed only for non-default values.
+the job, so a bad edit cannot silently fall back to defaults. The one
+exception is `include`: a file without it reads as `[]`, so the workflow could
+ship before `settings.json` gained the key. `--timeout` is always passed,
+because OCR treats a missing flag as 15 minutes. The other flags are passed
+only for non-default values.
+
+OCR has no flag for `include`, so the workflow writes the patterns to
+`~/.opencodereview/rule.json`, OCR's global rule layer, when the list is not
+empty. A repository's own `.opencodereview/rule.json` replaces that layer
+completely when it sets a non-empty `include` or `exclude`, even when it sets
+only `exclude` or different `include` patterns. Such a repository must repeat
+the shared `include` patterns in its own file to keep them. A repository file
+with neither list, such as `{}`, leaves the global layer in effect.
 
 ## Releases
 
 wall-e-infra's `ocr-dispatch.yml` follows the `v1` tag. To release a change,
-tag it `v1.x.y` and move `v1` to the same commit. When upgrading OCR, change `OCR_VERSION`, `OCR_SHA256` (the
-release's `opencodereview-linux-amd64` digest) and `OCR_POSTER_SHA256` (the
+tag it `v1.x.y` and move `v1` to the same commit. A new `settings.json` key
+needs the workflow release first, because the released workflow rejects keys
+it does not know; then the settings page release, which validates the same
+keys; then the value in `settings.json`.
+
+When upgrading OCR, change `OCR_VERSION`, `OCR_SHA256` (the release's
+`opencodereview-linux-amd64` digest) and `OCR_POSTER_SHA256` (the
 `scripts/github-actions/post-review-comments.js` digest at that tag) together.
