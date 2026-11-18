@@ -414,16 +414,20 @@ jobs:
             // or outside the diff) would then disappear, so a narrowed run keeps
             // them in a collapsed section until the next full review.
             const SEP = '\n\n---\n\n';
+            // Split only where the poster starts a block: a finding (badge or
+            // path heading), warnings, or a note. A rule inside a finding's own
+            // text stays in that finding.
+            const BLOCK = /\n\n---\n\n(?=!\[|### 📄 |⚠️ \*\*Warnings|ℹ️ )/;
             const EARLIER = '<!-- ocr-review-earlier -->';
             const isFinding = (block) => block.includes('### 📄 `');
             const earlierFindings = (body) => {
-              const [own, carried = ''] = body.split(EARLIER);
+              const [own, carried = ''] = body.replace(/\r\n/g, '\n').split(EARLIER);
               const ownBlocks = own
                 .replace(/\n\n<!-- ocr-checkpoint:v1 [A-Za-z0-9+/]+={0,2} -->/g, '')
                 .replace(/\n\n_Reviewed `[0-9a-f]+\.\.[0-9a-f]+` only; earlier commits in this PR were reviewed in a previous run\._/g, '')
-                .split(SEP)
+                .split(BLOCK)
                 .slice(1);
-              const carriedBlocks = carried.replace(/\n\n<\/details>\s*$/, '').split(SEP).slice(1);
+              const carriedBlocks = carried.replace(/\n\n<\/details>\s*$/, '').split(BLOCK).slice(1);
               return [...new Set([...ownBlocks, ...carriedBlocks].map((b) => b.trim()).filter(isFinding))];
             };
             const narrowed = process.env.RANGE_MODE === 'checkpoint' && process.env.RANGE_REASON !== 'same_head_noop';

@@ -83,7 +83,8 @@ the whole pull request instead when any of these hold:
 - The fingerprint changed: any `settings.json` value, `OCR_VERSION`,
   `OCR_EXTRA_HEADERS`, `OCR_ROUTE_CATEGORIES` or the repository's
   `.opencodereview/rule.json`.
-- The range could not be resolved. Such a run records no new checkpoint.
+- The range could not be resolved, for example because the comments could
+  not be listed or git failed.
 
 A partial or failed review keeps the old checkpoint, so the next run covers
 its range again. A run on the head the checkpoint already covers runs no
@@ -93,7 +94,12 @@ and the reason, such as `checkpoint ok` or `config_changed`.
 The poster rewrites the summary comment on every run. A narrowed run keeps the
 findings that only the previous summary held, such as routed performance
 findings, in a collapsed "earlier reviews" section, until the next full review
-starts the summary over. To force a full review, delete the summary comment.
+starts the summary over.
+
+Reopening a pull request or marking a draft ready for review does not force a
+full review: the dispatch carries no event type, so a reopen on a covered head
+reviews nothing and a draft marked ready reviews the commits since its last
+checkpoint. To force a full review, delete the summary comment.
 
 ## Settings
 
