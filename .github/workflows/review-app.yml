@@ -421,7 +421,9 @@ jobs:
             const EARLIER = '<!-- ocr-review-earlier -->';
             const isFinding = (block) => block.includes('### 📄 `');
             const earlierFindings = (body) => {
-              const [own, carried = ''] = body.replace(/\r\n/g, '\n').split(EARLIER);
+              // The section starts with SEP + EARLIER (see section below), so split
+              // on both: a rule left on the summary's last finding would stay on it.
+              const [own, carried = ''] = body.replace(/\r\n/g, '\n').split(SEP + EARLIER);
               const ownBlocks = own
                 .replace(/\n\n<!-- ocr-checkpoint:v1 [A-Za-z0-9+/]+={0,2} -->/g, '')
                 .replace(/\n\n_Reviewed `[0-9a-f]+\.\.[0-9a-f]+` only; earlier commits in this PR were reviewed in a previous run\._/g, '')
