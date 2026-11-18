@@ -398,13 +398,6 @@ jobs:
             // only github-actions[bot] comments count and every push repeats
             // the App's own findings.
             const login = `${process.env.APP_SLUG}[bot]`;
-            const reviewer = {
-              ...github,
-              rest: {
-                ...github.rest,
-                users: { ...github.rest.users, getAuthenticated: async () => ({ data: { login } }) },
-              },
-            };
             const appSlug = process.env.APP_SLUG;
             const log = (m) => core.info(m);
 
@@ -435,13 +428,38 @@ jobs:
             const narrowed = process.env.RANGE_MODE === 'checkpoint' && process.env.RANGE_REASON !== 'same_head_noop';
             let earlier = [];
             if (narrowed) {
-              try {
-                const old = await findExistingSummaryComment({ github: reviewer, ...target, prNumber, appSlug, log });
-                earlier = earlierFindings(old?.body ?? '');
-              } catch (e) {
-                core.warning(`Could not read the summary before posting (${e.message}); its earlier findings are not kept.`);
-              }
+              // No try: if this read fails, the step fails before the poster can
+              // rewrite the summary without these findings.
+              const old = await findExistingSummaryComment({ github, ...target, prNumber, appSlug, log });
+              earlier = earlierFindings(old?.body ?? '');
             }
+            const section = (blocks) => `${SEP}${EARLIER}\n<details><summary>${blocks.length} finding(s) from earlier reviews of this pull request. They may be fixed since.</summary>${SEP}${blocks.join(SEP)}\n\n</details>`;
+            // The section goes into every summary body the poster writes, so it
+            // lands in the same write as the checkpoint and cannot be lost
+            // between two writes.
+            let dropped = 0;
+            const withEarlier = (body) => {
+              if (!earlier.length || typeof body !== 'string' || !body.startsWith('<!-- ocr-summary -->')) return body;
+              // GitHub rejects a comment body over 65536 characters. Keep the
+              // newest findings, which come first.
+              let kept = earlier;
+              while (kept.length && body.length + section(kept).length > 65536) kept = kept.slice(0, -1);
+              dropped = earlier.length - kept.length;
+              return kept.length ? body + section(kept) : body;
+            };
+            const issues = github.rest.issues;
+            const reviewer = {
+              ...github,
+              rest: {
+                ...github.rest,
+                users: { ...github.rest.users, getAuthenticated: async () => ({ data: { login } }) },
+                issues: {
+                  ...issues,
+                  createComment: (params) => issues.createComment({ ...params, body: withEarlier(params.body) }),
+                  updateComment: (params) => issues.updateComment({ ...params, body: withEarlier(params.body) }),
+                },
+              },
+            };
 
             await runPostReviewComments({
               github: reviewer,
@@ -472,32 +490,8 @@ jobs:
             });
 
             if (earlier.length) {
-              let now = null;
-              try {
-                now = await findExistingSummaryComment({ github: reviewer, ...target, prNumber, appSlug, log });
-              } catch (e) {
-                core.warning(`Could not read the summary after posting (${e.message}).`);
-              }
-              if (!now) {
-                core.warning(`${earlier.length} earlier summary finding(s) were not kept: no summary comment to add them to.`);
-              } else {
-                const section = (blocks) => `${SEP}${EARLIER}\n<details><summary>${blocks.length} finding(s) from earlier reviews of this pull request. They may be fixed since.</summary>${SEP}${blocks.join(SEP)}\n\n</details>`;
-                // GitHub rejects a comment body over 65536 characters. Keep the
-                // newest findings, which come first.
-                let kept = earlier;
-                while (kept.length && (now.body.length + section(kept).length) > 65536) kept = kept.slice(0, -1);
-                if (kept.length < earlier.length) {
-                  core.warning(`Dropped ${earlier.length - kept.length} earlier finding(s) to fit GitHub's comment size limit.`);
-                }
-                if (kept.length) {
-                  try {
-                    await reviewer.rest.issues.updateComment({ ...target, comment_id: now.id, body: now.body + section(kept) });
-                    core.info(`Kept ${kept.length} earlier summary finding(s).`);
-                  } catch (e) {
-                    core.warning(`${kept.length} earlier summary finding(s) were not kept: ${e.message}`);
-                  }
-                }
-              }
+              core.info(`Kept ${earlier.length - dropped} earlier summary finding(s) in the summary.`);
+              if (dropped) core.warning(`Dropped ${dropped} earlier finding(s) to fit GitHub's comment size limit.`);
             }
 
       - name: Fail on review error
