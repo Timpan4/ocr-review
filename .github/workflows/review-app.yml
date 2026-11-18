@@ -40,6 +40,14 @@ env:
   OCR_SHA256: 673ed6bfd905bf68383269e78945b9d873a5c8c0931fce6e86374ca58df0b8b1
   # scripts/github-actions/post-review-comments.js at OCR_VERSION.
   OCR_POSTER_SHA256: 073f917f2ae9b4c13aef840043957fa087efb45e75d551a277506833dabcf294
+  # OCR sets prompt_cache_key per conversation, but the ChatGPT backend missed
+  # the cache on most follow-up calls until each request also carried the
+  # conversation key as a session_id header, as Codex sends. OCR expands
+  # {ocr_session_key} itself.
+  OCR_EXTRA_HEADERS: 'session_id={ocr_session_key}'
+  # Performance findings without a measurement went unfixed, so they go to the
+  # summary instead of inline threads.
+  OCR_ROUTE_CATEGORIES: performance
 
 jobs:
   review:
@@ -107,6 +115,7 @@ jobs:
             if (pr.head.sha !== process.env.HEAD_SHA) return skip(`head moved to ${pr.head.sha}`);
             core.setOutput('review', 'true');
             core.setOutput('base_sha', pr.base.sha);
+            core.setOutput('base_ref', pr.base.ref);
 
       - uses: actions/checkout@v7
         if: steps.pr.outputs.review == 'true'
@@ -198,6 +207,9 @@ jobs:
               fs.writeFileSync(path.join(dir, 'rule.json'), `${JSON.stringify({ include: s.include }, null, 2)}\n`);
             }
             core.setOutput('model', s.model);
+            // Every setting changes what a review would say, so all of them feed
+            // the review checkpoint's fingerprint, in a fixed key order.
+            core.setOutput('fingerprint_input', JSON.stringify(keys.map((k) => s[k])));
             core.info(`model=${s.model} extra flags: ${args.join(' ') || '(none)'} include: ${s.include.join(' ') || '(none)'}`);
 
       - name: Configure OCR
@@ -208,21 +220,129 @@ jobs:
           set -euo pipefail
           ocr config set provider chatgpt
           ocr config set providers.chatgpt.model "$OCR_MODEL"
-          # OCR sets prompt_cache_key per conversation, but the ChatGPT backend
-          # missed the cache on most follow-up calls until each request also
-          # carried the conversation key as a session_id header, as Codex sends.
-          # The single quotes keep OCR's {ocr_session_key} template literal.
-          ocr config set providers.chatgpt.extra_headers 'session_id={ocr_session_key}'
+          ocr config set providers.chatgpt.extra_headers "$OCR_EXTRA_HEADERS"
+
+      # A complete review records the head it covered as a checkpoint in the
+      # sticky summary comment, and the next push reviews only the commits
+      # since. Whenever that is in doubt, the review covers the whole pull
+      # request as before. See README.md, Review range.
+      - name: Resolve review range
+        id: range
+        if: steps.pr.outputs.review == 'true'
+        uses: actions/github-script@v9
+        env:
+          REPO_NAME: ${{ steps.target.outputs.name }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          SETTINGS: ${{ steps.settings.outputs.fingerprint_input }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const crypto = require('crypto');
+            const { spawnSync } = require('child_process');
+            const emit = (range, mergeBase, fingerprint, carry) => {
+              core.setOutput('mode', range.mode);
+              core.setOutput('reason', range.reason);
+              // Empty in full mode, so Run OCR falls back to the base.
+              core.setOutput('from', range.mode === 'checkpoint' ? range.from : '');
+              core.setOutput('merge_base', mergeBase);
+              core.setOutput('fingerprint', fingerprint);
+              // The marker read from the summary, re-emitted by a run that does
+              // not advance it.
+              core.setOutput('carry', carry);
+              if (range.reason === 'same_head_noop') {
+                core.notice(`Nothing to review: the checkpoint already covers ${range.to.slice(0, 7)}.`);
+              } else if (range.mode === 'checkpoint') {
+                core.notice(`Reviewing ${range.from.slice(0, 7)}..${range.to.slice(0, 7)} only (checkpoint ${range.reason}).`);
+              } else {
+                core.notice(`Reviewing the whole pull request (${range.reason}).`);
+              }
+            };
+            // Every failure here has the same safe answer, a full review, so
+            // nothing in this step fails the job. An empty fingerprint also
+            // stops the poster from recording a checkpoint.
+            try {
+              const { readCheckpointComment, resolveCheckpointRange } =
+                require(`${process.env.RUNNER_TEMP}/post-review-comments.js`);
+              const git = (...args) => spawnSync('git', args, { cwd: process.env.GITHUB_WORKSPACE, encoding: 'utf8' });
+              // The merge-base, not the base head: main moving on does not change
+              // what the pull request adds, while a merge of main into the branch
+              // or a new base does, and then the checkpoint reports base_changed.
+              const mb = git('merge-base', process.env.BASE_SHA, process.env.HEAD_SHA);
+              const mergeBase = mb.status === 0 ? mb.stdout.trim() : '';
+              if (!/^[0-9a-f]{40}$/.test(mergeBase)) {
+                throw new Error(`git merge-base exited ${mb.status}: ${(mb.stderr || mb.error?.message || '').trim()}`);
+              }
+              // OCR also reads the repository's own .opencodereview/rule.json.
+              // A read error throws, which reviews everything.
+              const rulePath = path.join(process.env.GITHUB_WORKSPACE, '.opencodereview', 'rule.json');
+              const ruleDigest = fs.existsSync(rulePath)
+                ? crypto.createHash('sha256').update(fs.readFileSync(rulePath)).digest('hex')
+                : 'none';
+              // Everything that changes what a review would say. A change to any
+              // of it reviews the whole pull request once (config_changed). JSON
+              // keeps the field boundaries unambiguous.
+              const fingerprint = crypto.createHash('sha256').update(JSON.stringify([
+                process.env.SETTINGS,
+                process.env.OCR_VERSION,
+                process.env.OCR_EXTRA_HEADERS,
+                process.env.OCR_ROUTE_CATEGORIES,
+                ruleDigest,
+              ])).digest('hex').slice(0, 16);
+              const common = {
+                github,
+                owner: 'Timpan4',
+                repo: process.env.REPO_NAME,
+                prNumber: Number(process.env.PR_NUMBER),
+                // Only a summary this App wrote can carry a checkpoint.
+                appSlug: process.env.APP_SLUG,
+                log: (m) => core.info(m),
+              };
+              const existing = await readCheckpointComment(common);
+              const range = await resolveCheckpointRange({
+                ...common,
+                read: existing,
+                enabled: true,
+                sticky: true,
+                headSha: process.env.HEAD_SHA,
+                baseRef: process.env.BASE_REF,
+                mergeBase,
+                fingerprint,
+                // git's own verdict: 0 ancestor, 1 not (a rebase or force-push),
+                // 128 unknown object. Anything but 0 reviews everything.
+                isAncestor: (a, b) => git('merge-base', '--is-ancestor', a, b).status,
+              });
+              emit(range, mergeBase, fingerprint, existing.raw || '');
+            } catch (e) {
+              core.warning(`Could not resolve a review range (${e.message}); reviewing the whole pull request.`);
+              emit({ mode: 'full', reason: 'resolver_error', from: '', to: process.env.HEAD_SHA }, '', '', '');
+            }
 
       - name: Run OCR
         if: steps.pr.outputs.review == 'true'
         env:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ inputs.head_sha }}
+          RANGE_FROM: ${{ steps.range.outputs.from }}
+          RANGE_REASON: ${{ steps.range.outputs.reason }}
         run: |
+          # The checkpoint already covers this head, as on a rerun, so there is
+          # nothing new to review and the summary stays as it is.
+          if [ "$RANGE_REASON" = same_head_noop ]; then
+            echo "OCR_EXIT_CODE=0" >>"$GITHUB_ENV"
+            exit 0
+          fi
           mapfile -d '' -t extra <"$RUNNER_TEMP/ocr-args"
           set +e
-          ocr review --from "$BASE_SHA" --to "$HEAD_SHA" --audience agent --format json "${extra[@]}" \
+          # OCR reviews merge-base(from, to)..to, so the base sha reviews the
+          # whole pull request and a checkpoint, an ancestor of the head,
+          # reviews only the commits after it.
+          ocr review --from "${RANGE_FROM:-$BASE_SHA}" --to "$HEAD_SHA" --audience agent --format json "${extra[@]}" \
             >"$RUNNER_TEMP/ocr-result.json" 2>"$RUNNER_TEMP/ocr-stderr.log"
           code=$?
           set -e
@@ -236,6 +356,14 @@ jobs:
           OCR_PR_NUMBER: ${{ inputs.pr_number }}
           REPO_NAME: ${{ steps.target.outputs.name }}
           APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          RANGE_MODE: ${{ steps.range.outputs.mode }}
+          RANGE_REASON: ${{ steps.range.outputs.reason }}
+          RANGE_FROM: ${{ steps.range.outputs.from }}
+          MERGE_BASE: ${{ steps.range.outputs.merge_base }}
+          CHECKPOINT_FINGERPRINT: ${{ steps.range.outputs.fingerprint }}
+          CHECKPOINT_CARRY: ${{ steps.range.outputs.carry }}
         with:
           github-token: ${{ steps.app.outputs.token }}
           script: |
@@ -257,7 +385,7 @@ jobs:
                 return;
               }
             }
-            const { runPostReviewComments } = require(`${temp}/post-review-comments.js`);
+            const { runPostReviewComments, findExistingSummaryComment } = require(`${temp}/post-review-comments.js`);
             const prNumber = Number(process.env.OCR_PR_NUMBER);
             // The poster reads the target from context.repo and context.issue,
             // which are getters on the Actions context and point at the calling
@@ -270,13 +398,69 @@ jobs:
             // only github-actions[bot] comments count and every push repeats
             // the App's own findings.
             const login = `${process.env.APP_SLUG}[bot]`;
+            const appSlug = process.env.APP_SLUG;
+            const log = (m) => core.info(m);
+
+            // The poster rewrites the sticky summary on every run, and a run that
+            // reviewed only the new commits reports only their findings. Findings
+            // that lived only in the summary (routed by category, without a line,
+            // or outside the diff) would then disappear, so a narrowed run keeps
+            // them in a collapsed section until the next full review.
+            const SEP = '\n\n---\n\n';
+            // Split only where the poster starts a block: a finding (badge or
+            // path heading), warnings, or a note. A rule inside a finding's own
+            // text stays in that finding.
+            const BLOCK = /\n\n---\n\n(?=!\[|### 📄 |⚠️ \*\*Warnings|ℹ️ )/;
+            const EARLIER = '<!-- ocr-review-earlier -->';
+            const isFinding = (block) => block.includes('### 📄 `');
+            const earlierFindings = (body) => {
+              // The section starts with SEP + EARLIER (see section below), so split
+              // on both: a rule left on the summary's last finding would stay on it.
+              const [own, carried = ''] = body.replace(/\r\n/g, '\n').split(SEP + EARLIER);
+              const ownBlocks = own
+                .replace(/\n\n<!-- ocr-checkpoint:v1 [A-Za-z0-9+/]+={0,2} -->/g, '')
+                .replace(/\n\n_Reviewed `[0-9a-f]+\.\.[0-9a-f]+` only; earlier commits in this PR were reviewed in a previous run\._/g, '')
+                .split(BLOCK)
+                .slice(1);
+              const carriedBlocks = carried.replace(/\n\n<\/details>\s*$/, '').split(BLOCK).slice(1);
+              return [...new Set([...ownBlocks, ...carriedBlocks].map((b) => b.trim()).filter(isFinding))];
+            };
+            const narrowed = process.env.RANGE_MODE === 'checkpoint' && process.env.RANGE_REASON !== 'same_head_noop';
+            let earlier = [];
+            if (narrowed) {
+              // No try: if this read fails, the step fails before the poster can
+              // rewrite the summary without these findings.
+              const old = await findExistingSummaryComment({ github, ...target, prNumber, appSlug, log });
+              earlier = earlierFindings(old?.body ?? '');
+            }
+            const section = (blocks) => `${SEP}${EARLIER}\n<details><summary>${blocks.length} finding(s) from earlier reviews of this pull request. They may be fixed since.</summary>${SEP}${blocks.join(SEP)}\n\n</details>`;
+            // The section goes into every summary body the poster writes, so it
+            // lands in the same write as the checkpoint and cannot be lost
+            // between two writes.
+            let dropped = 0;
+            const withEarlier = (body) => {
+              if (!earlier.length || typeof body !== 'string' || !body.startsWith('<!-- ocr-summary -->')) return body;
+              // GitHub rejects a comment body over 65536 characters. Keep the
+              // newest findings, which come first.
+              let kept = earlier;
+              while (kept.length && body.length + section(kept).length > 65536) kept = kept.slice(0, -1);
+              dropped = earlier.length - kept.length;
+              return kept.length ? body + section(kept) : body;
+            };
+            const issues = github.rest.issues;
             const reviewer = {
               ...github,
               rest: {
                 ...github.rest,
                 users: { ...github.rest.users, getAuthenticated: async () => ({ data: { login } }) },
+                issues: {
+                  ...issues,
+                  createComment: (params) => issues.createComment({ ...params, body: withEarlier(params.body) }),
+                  updateComment: (params) => issues.updateComment({ ...params, body: withEarlier(params.body) }),
+                },
               },
             };
+
             await runPostReviewComments({
               github: reviewer,
               context: reviewContext,
@@ -285,13 +469,30 @@ jobs:
               prNumber,
               resultPath: `${temp}/ocr-result.json`,
               stderrPath: `${temp}/ocr-stderr.log`,
+              // One summary comment, rewritten each run. It carries the checkpoint.
+              stickySummary: true,
               // Skip findings on lines an earlier OCR comment on this PR already
               // covers, resolved or not, so a later push does not raise them again.
               incremental: true,
-              // Performance findings without a measurement went unfixed, so they
-              // go to the summary instead of inline threads.
-              routeCategories: 'performance',
+              routeCategories: process.env.OCR_ROUTE_CATEGORIES,
+              // The poster records a checkpoint only after a complete review
+              // with every finding posted, and otherwise keeps the old one.
+              checkpointEnabled: true,
+              checkpointCarry: process.env.CHECKPOINT_CARRY,
+              checkpointBaseRef: process.env.BASE_REF,
+              checkpointMergeBase: process.env.MERGE_BASE,
+              checkpointFingerprint: process.env.CHECKPOINT_FINGERPRINT,
+              checkpointNoop: process.env.RANGE_REASON === 'same_head_noop',
+              rangeMode: process.env.RANGE_MODE,
+              rangeFrom: process.env.RANGE_FROM,
+              rangeTo: process.env.HEAD_SHA,
+              appSlug,
             });
+
+            if (earlier.length) {
+              core.info(`Kept ${earlier.length - dropped} earlier summary finding(s) in the summary.`);
+              if (dropped) core.warning(`Dropped ${dropped} earlier finding(s) to fit GitHub's comment size limit.`);
+            }
 
       - name: Fail on review error
         if: steps.pr.outputs.review == 'true' && env.OCR_EXIT_CODE != '0'
