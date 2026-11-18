@@ -112,7 +112,8 @@ hand works the same way.
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `model` | ChatGPT model for the `chatgpt` provider. | `gpt-6.1-sol` |
-| `effort` | `ocr review --effort`: `low`, `medium` or `high`. `""` uses OCR's default. | `""` |
+| `effort` | `ocr review --effort`: `low`, `medium` or `high`, the number of review rounds per file group (1, 2 or 3). A round after the first runs only when the previous one found something. `""` uses OCR's default, `medium`. | `""` |
+| `reasoning` | The model's reasoning effort: `low`, `medium` or `high`, sent as `reasoning.effort` through `providers.chatgpt.extra_body`. `""` sends nothing, so the model uses its own default. | `""` |
 | `noFilter` | `--no-filter`: keep every comment, skip OCR's LLM post-filtering. | `false` |
 | `exclude` | `--exclude`: gitignore-style patterns to skip, merged with each repository's `rule.json` excludes. | `[]` |
 | `include` | Gitignore-style patterns to review even when OCR would skip them for their extension or a built-in path such as a nested `**/vendor/**`, for example `**/*.md`. Provider directories at the repository root, such as `vendor/`, `node_modules/` and `target/`, stay excluded. Written as `include` in `~/.opencodereview/rule.json` on the runner. Same pattern rules as `exclude`. `exclude` still wins over `include`. | `[]` |
@@ -120,9 +121,9 @@ hand works the same way.
 | `timeoutMinutes` | `--timeout`: time limit in minutes for each review group, multiplied by the template's review rounds. It does not limit the whole review. `0` sets no limit; the job still stops at 60 minutes. At most `60`, the job timeout. | `15` (OCR's default) |
 
 The workflow rejects unknown keys, missing keys and invalid values and fails
-the job, so a bad edit cannot silently fall back to defaults. The one
-exception is `include`: a file without it reads as `[]`, so the workflow could
-ship before `settings.json` gained the key. `--timeout` is always passed,
+the job, so a bad edit cannot silently fall back to defaults. The exceptions
+are `include` and `reasoning`: a file without them reads as `[]` and `""`, so
+the workflow could ship before `settings.json` gained the keys. `--timeout` is always passed,
 because OCR treats a missing flag as 15 minutes. The other flags are passed
 only for non-default values.
 

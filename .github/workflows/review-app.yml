@@ -161,15 +161,19 @@ jobs:
             });
             const s = JSON.parse(data);
             const fail = (msg) => { throw new Error(`Timpan4/ocr-review settings.json: ${msg}`); };
-            const keys = ['model', 'effort', 'noFilter', 'exclude', 'include', 'maxTokensBudget', 'timeoutMinutes'];
+            const keys = ['model', 'effort', 'reasoning', 'noFilter', 'exclude', 'include', 'maxTokensBudget', 'timeoutMinutes'];
             if (s === null || typeof s !== 'object' || Array.isArray(s)) fail('must be a JSON object');
             // Rollout: this workflow is released before settings.json on main gains
-            // include, so a missing include reads as []. See README.md, Releases.
+            // include or reasoning, so a missing include reads as [] and a missing
+            // reasoning as "". See README.md, Releases.
             if (!('include' in s)) s.include = [];
+            if (!('reasoning' in s)) s.reasoning = '';
             for (const k of Object.keys(s)) if (!keys.includes(k)) fail(`unknown key ${k}`);
             for (const k of keys) if (!(k in s)) fail(`missing key ${k}`);
             if (typeof s.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/.test(s.model)) fail('model must be a model name');
             if (!['', 'low', 'medium', 'high'].includes(s.effort)) fail('effort must be "", low, medium or high');
+            // Interpolated into JSON in Configure OCR, so only these exact values.
+            if (!['', 'low', 'medium', 'high'].includes(s.reasoning)) fail('reasoning must be "", low, medium or high');
             if (typeof s.noFilter !== 'boolean') fail('noFilter must be true or false');
             // Commas would split the --exclude value; control characters include NUL,
             // which would split ocr-args into extra arguments. include follows the
@@ -207,19 +211,26 @@ jobs:
               fs.writeFileSync(path.join(dir, 'rule.json'), `${JSON.stringify({ include: s.include }, null, 2)}\n`);
             }
             core.setOutput('model', s.model);
+            core.setOutput('reasoning', s.reasoning);
             // Every setting changes what a review would say, so all of them feed
             // the review checkpoint's fingerprint, in a fixed key order.
             core.setOutput('fingerprint_input', JSON.stringify(keys.map((k) => s[k])));
-            core.info(`model=${s.model} extra flags: ${args.join(' ') || '(none)'} include: ${s.include.join(' ') || '(none)'}`);
+            core.info(`model=${s.model} reasoning=${s.reasoning || '(model default)'} extra flags: ${args.join(' ') || '(none)'} include: ${s.include.join(' ') || '(none)'}`);
 
       - name: Configure OCR
         if: steps.pr.outputs.review == 'true'
         env:
           OCR_MODEL: ${{ steps.settings.outputs.model }}
+          OCR_REASONING: ${{ steps.settings.outputs.reasoning }}
         run: |
           set -euo pipefail
           ocr config set provider chatgpt
           ocr config set providers.chatgpt.model "$OCR_MODEL"
+          # OCR sends no reasoning effort of its own, so without this the model
+          # uses its default. Load settings allows only low, medium and high.
+          if [ -n "$OCR_REASONING" ]; then
+            ocr config set providers.chatgpt.extra_body "{\"reasoning\":{\"effort\":\"$OCR_REASONING\"}}"
+          fi
           ocr config set providers.chatgpt.extra_headers "$OCR_EXTRA_HEADERS"
 
       # A complete review records the head it covered as a checkpoint in the
