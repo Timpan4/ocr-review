@@ -255,9 +255,13 @@ jobs:
               // The marker read from the summary, re-emitted by a run that does
               // not advance it.
               core.setOutput('carry', carry);
-              core.notice(range.mode === 'checkpoint'
-                ? `Reviewing ${range.from.slice(0, 7)}..${range.to.slice(0, 7)} only (checkpoint ${range.reason}).`
-                : `Reviewing the whole pull request (${range.reason}).`);
+              if (range.reason === 'same_head_noop') {
+                core.notice(`Nothing to review: the checkpoint already covers ${range.to.slice(0, 7)}.`);
+              } else if (range.mode === 'checkpoint') {
+                core.notice(`Reviewing ${range.from.slice(0, 7)}..${range.to.slice(0, 7)} only (checkpoint ${range.reason}).`);
+              } else {
+                core.notice(`Reviewing the whole pull request (${range.reason}).`);
+              }
             };
             // Every failure here has the same safe answer, a full review, so
             // nothing in this step fails the job. An empty fingerprint also
