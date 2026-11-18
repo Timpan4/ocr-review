@@ -36,10 +36,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  OCR_VERSION: v1.13.3
-  OCR_SHA256: 843be0e56fdff0a5ca6f86c5866f942d6a372dff1c0ca19e7893d72495abf45c
+  OCR_VERSION: v1.13.12
+  OCR_SHA256: 673ed6bfd905bf68383269e78945b9d873a5c8c0931fce6e86374ca58df0b8b1
   # scripts/github-actions/post-review-comments.js at OCR_VERSION.
-  OCR_POSTER_SHA256: 1d5decf90627353f1e7a2cad291d4ee4ec0a661d9724b93b2d7d5246f33462e2
+  OCR_POSTER_SHA256: 073f917f2ae9b4c13aef840043957fa087efb45e75d551a277506833dabcf294
 
 jobs:
   review:
@@ -225,7 +225,7 @@ jobs:
           cat "$RUNNER_TEMP/ocr-stderr.log" >&2
 
       - name: Post review comments
-        if: steps.pr.outputs.review == 'true' && env.OCR_EXIT_CODE == '0'
+        if: steps.pr.outputs.review == 'true'
         uses: actions/github-script@v9
         env:
           OCR_PR_NUMBER: ${{ inputs.pr_number }}
@@ -236,6 +236,22 @@ jobs:
           script: |
             const fs = require('fs');
             const temp = process.env.RUNNER_TEMP;
+            // Since OCR v1.13.12, a review where some files failed on timeouts or
+            // provider errors exits non-zero. Post what such a partial review
+            // found; the next step still fails the job. Any other non-zero exit
+            // posts nothing, as before.
+            if (process.env.OCR_EXIT_CODE !== '0') {
+              let state;
+              try {
+                state = JSON.parse(fs.readFileSync(`${temp}/ocr-result.json`, 'utf8')).manifest?.terminal_state;
+              } catch {
+                state = undefined;
+              }
+              if (state !== 'partial') {
+                core.info(`Not posting: ocr review exited ${process.env.OCR_EXIT_CODE} with terminal_state ${state ?? 'unknown'}.`);
+                return;
+              }
+            }
             const { runPostReviewComments } = require(`${temp}/post-review-comments.js`);
             const prNumber = Number(process.env.OCR_PR_NUMBER);
             // The poster reads the target from context.repo and context.issue,
