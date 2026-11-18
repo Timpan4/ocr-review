@@ -63,6 +63,38 @@ options:
   requests, none of 10 inline performance findings led to a change, and none
   came with a measurement.
 
+## Review range
+
+Each push reviews only the commits since the last head that a complete review
+covered, using OCR's own cross-push checkpoints. On 2026-11-18, OCR ran 107
+reviews for 18 pull requests, and a push changed between 13% and 89% of a
+pull request's files, so most of each full review repeated earlier work.
+
+After a review with terminal state `complete` and every finding posted, the
+poster records the reviewed head as a checkpoint in a hidden marker in the
+summary comment. The next run reviews `<checkpoint>..<new head>`. It reviews
+the whole pull request instead when any of these hold:
+
+- No summary comment from the App, or no readable marker in it.
+- The base branch or the merge-base changed, for example after merging the
+  base branch into the pull request branch.
+- The checkpoint is not an ancestor of the new head, after a rebase or a
+  force-push.
+- The fingerprint changed: any `settings.json` value, `OCR_VERSION`,
+  `OCR_EXTRA_HEADERS`, `OCR_ROUTE_CATEGORIES` or the repository's
+  `.opencodereview/rule.json`.
+- The range could not be resolved. Such a run records no new checkpoint.
+
+A partial or failed review keeps the old checkpoint, so the next run covers
+its range again. A run on the head the checkpoint already covers runs no
+review and leaves the summary as it is. The job log's notice names the range
+and the reason, such as `checkpoint ok` or `config_changed`.
+
+The poster rewrites the summary comment on every run. A narrowed run keeps the
+findings that only the previous summary held, such as routed performance
+findings, in a collapsed "earlier reviews" section, until the next full review
+starts the summary over. To force a full review, delete the summary comment.
+
 ## Settings
 
 `settings.json` on `main` holds the settings shared by every repository. The
