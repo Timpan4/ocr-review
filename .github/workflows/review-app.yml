@@ -208,6 +208,11 @@ jobs:
           set -euo pipefail
           ocr config set provider chatgpt
           ocr config set providers.chatgpt.model "$OCR_MODEL"
+          # OCR sets prompt_cache_key per conversation, but the ChatGPT backend
+          # missed the cache on most follow-up calls until each request also
+          # carried the conversation key as a session_id header, as Codex sends.
+          # The single quotes keep OCR's {ocr_session_key} template literal.
+          ocr config set providers.chatgpt.extra_headers 'session_id={ocr_session_key}'
 
       - name: Run OCR
         if: steps.pr.outputs.review == 'true'
